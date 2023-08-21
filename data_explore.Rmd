@@ -1,0 +1,105 @@
+---
+title: "RChallenge German credit dataset"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    fig_caption: true
+    self_contained: true
+    code_folding: hide
+---
+
+```{r}
+knitr::opts_chunk$set(collapse = TRUE, echo = FALSE, message = FALSE, warning = FALSE)
+```
+
+
+```{r echo =  FALSE}
+set.seed(123)
+library(knitrBootstrap)
+library(rchallenge)
+library(DT)
+library(dplyr)
+rawdata <- rchallenge::german
+```
+
+# General data exploration 
+
+Raw, unedited data looks messy:
+
+```{r}
+ncol(rawdata)
+DT::datatable(rawdata)
+```
+
+Plan: encode, introduce dummy variables where necessary, data split, .
+
+```{r}
+#mutating numerical columns to numeric  
+rawdata %>% 
+	mutate(age = as.numeric(age),
+	       amount = as.numeric(amount),
+	       duration = as.numeric(duration))-> rawdata
+# Exploring factor variables
+columninfo <- apply(rawdata %>% select(!where(is.numeric)), 2, function(col) {
+col %>% table -> mystr
+mystr	      #cat(col, "\n", as.character(mystr), "\n")
+	  })
+
+columninfo
+```
+
+```{r}
+edited <- rawdata %>%
+	mutate(status = 
+	       case_when(status == "... < 0 DM" ~
+```
+
+## Data split
+
+
+## Missing values
+
+```{r}
+apply(rawdata, 2, is.character)
+rawdata %>% is.na %>% colSums
+```
+
+No missing values? 
+
+## Response variable
+
+Data leak if distribution of classes is investigated on complete dataset?
+
+```{r}
+rawdata %>% group_by(credit_risk) %>% tally
+```
+
+Notes:
+-standard scale numerical variables (robust to outliers) 
+-age categories?!
+-balance dataset:
+	by definition mild imbalance (within 40% minority cases)
+	balance train:
+	1. train on true distribution -> if it generalizes well good
+	2. downsample balance training data--> reduce number of bad risk instances
+	   stratified sampling versus random sampling
+	   Accuracy bad metric for imbalanced dataset
+	   area under ROC
+	   so try to model without resampling but look at precision and recall and if at accuracy then compare to baseline
+	SMOTE in python synthesizes minority class samples
+-test 20%
+-caret createDataPartition, DMwR -> smote function
+trainIndex <- createDataPartition(iris$Species, p = .8, list = FALSE)
+training <- iris[trainIndex, ]
+testing <- iris[-trainIndex, ]
+# Apply SMOTE to the training set
+training_balanced <- SMOTE(Species ~ ., training, k = 5, perc.over = 100, perc.under = 200)
+
+# Train a decision tree model on the resampled training set
+model <- train(Species ~ ., training_balanced, method = "rpart")
+
+# Evaluate the performance of the trained model on the testing set
+predictions <- predict(model, testing)
+confusionMatrix(predictions, testing$Species)
+-feature selection
