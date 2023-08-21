@@ -76,8 +76,24 @@ rawdata %>% group_by(credit_risk) %>% tally
 ```
 
 Notes:
+does no checking or saving account most likley mean no savings or is it a true NA
 -standard scale numerical variables (robust to outliers) 
 -age categories?!
+-split personal status and gender?
+-number of existing credits is ordinal
+-which other variables are oridnal?
+	people liable
+-imbalanced predictors:
+	foreign workers
+	guarantors
+	other installment plans
+	job unemployed category
+	number of existing credits category 4
+	personal status
+	checking account
+	--> could  reduce number of categories for these
+-simple feature selection: chi square
+-pca?
 -balance dataset:
 	by definition mild imbalance (within 40% minority cases)
 	balance train:
@@ -88,7 +104,13 @@ Notes:
 	   area under ROC
 	   so try to model without resampling but look at precision and recall and if at accuracy then compare to baseline
 	SMOTE in python synthesizes minority class samples
--test 20%
+-zeroR or randomRate
+Odds of Guessing Minority Correct: 0.25 * 0.25 = 0.0625
+Odds of Guessing Majority Correct: 0.75 * 0.75 = 0.5625
+Baseline = 0.25**2 + 0.75**2 = 0.625
+-> informs how much value model adds to random guess but accuracy must additionally be over majority vote guess (zeroR)
+
+-test 25%
 -caret createDataPartition, DMwR -> smote function
 trainIndex <- createDataPartition(iris$Species, p = .8, list = FALSE)
 training <- iris[trainIndex, ]
