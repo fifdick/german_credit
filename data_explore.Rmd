@@ -76,6 +76,13 @@ rawdata %>% group_by(credit_risk) %>% tally
 ```
 
 Notes:
+outlier detection scatter plots
+paralllel category plot to relate categorical variables to each other
+-brier score to check if predicted propabilities match actual probabilties
+-feature importance to interpretation
+e.g information gain xgboost |
+30% bad cases-> if are the positives (1) then FN are very important that would be missed bad risks
+if good are the positives then FP are very important..that encoding is more intuitive -> ROC AUC but maybe better PR AUC for both classes  and F1 score hamonic average--> detection of rare events but they dont generalize well
 does no checking or saving account most likley mean no savings or is it a true NA
 -standard scale numerical variables (robust to outliers) 
 -age categories?!
