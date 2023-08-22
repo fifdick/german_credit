@@ -20,7 +20,15 @@ library(knitrBootstrap)
 library(rchallenge)
 library(DT)
 library(dplyr)
+library(ggplot2)
+library(reshape2)
+library(cowplot)
+library(patchwork)
+library(rstatix)
 rawdata <- rchallenge::german
+#define colors
+cols_sex = c("Female" = "lightseagreen", "Male" = "violetred4")
+cols_risk = c("good" = "darkseagreen3", "bad" = "firebrick2")
 ```
 
 # General data exploration 
@@ -48,9 +56,73 @@ rawdata %>%
 
 Skewed distributions or categorical variables with underrepresented categories?
 
+```{r}
+#mutating numerical columns to numeric  
+rawdata %>% 
+	mutate(age = as.numeric(age),
+	       amount = as.numeric(amount),
+	       duration = as.numeric(duration))-> rawdata
+rawdata %>% mutate(id = as.factor(seq(1,nrow(.)))) %>%
+	select(id, credit_risk, where(is.numeric)) %>%
+#	mutate(Age_logged = log2(age),
+#	       Duration = log2(duration),
+#	       Loan_amount = log2(amount)) %>%
+	reshape2::melt(., id.vars = c("id", "credit_risk")) %>%
+	mutate(variable = case_when(variable == "age" ~ "Age",
+				    variable == "duration" ~ "Duration",
+				    variable == "amount" ~ "Loan amount")) -> df
+ggplot(df, aes(x = value)) +
+	geom_histogram(fill = "transparent", col = "black", aes(y = ..density..), bins = 40) +
+	geom_density() +
+	facet_wrap(~variable, ncol = 1, scales = "free") +
+	cowplot::theme_cowplot() -> p1
+p1
+ggplot(df, aes(x = credit_risk, y = value, col = credit_risk)) +
+	#geom_histogram(bins = 40, fill = "transparent", aes( y = ..density..)) +
+	#geom_density() +
+	geom_violin() +
+ 	geom_boxplot(width = .2) +
+	scale_color_manual(values = cols_risk) +
+	ggpubr::stat_compare_means() +
+	#scale_fill_manual(values = cols_risk) +
+	facet_wrap(~variable, ncol = 1, scales = "free") +
+	cowplot::theme_cowplot() -> p2
+
+ df %>% 
+	 tidyr::pivot_wider(., names_from = "variable", id_cols = c("id", "credit_risk"), values_from = "value") -> df_wide
+ df_wide %>% 
+	 select(where(is.numeric)) %>%
+	cor(., use = "pairwise", method = "spearman") %>%
+	ggcorrplot::ggcorrplot(., hc.order = T, outline.col = "white", lab = T) +
+	 theme(axis.text.x = element_text(margin=margin(-2,0,0,0)),  # Order: top, right, bottom, left
+        axis.text.y = element_text(margin=margin(0,-2,0,0))) +
+  	geom_vline(xintercept=1:3-0.5, colour="white", size=2) +
+  	geom_hline(yintercept=1:3-0.5, colour="white", size=2)  -> p3
 
 
+(p1 + p2) / p3
+```
 
+- Log transfrom to alleviat skewedness AFTER data split
+- identificaton of outliers after datasplit replot distributions?
+- Corrplot for categorical variables
+
+```{r}
+rawdata %>%
+	select(-where(is.numeric)) %>%
+	mutate(id = seq(1,nrow(.))) %>%
+	reshape2::melt(., id.vars = "id") %>% 
+	group_by(variable, value) %>%
+	tally %>%
+	mutate(perc = 100 * (n / sum(n))) %>%
+ggplot(., aes(x = value, y = perc)) +
+geom_bar(stat = "identity") +
+coord_flip() +
+facet_wrap(~variable, scales =  "free") +
+theme_cowplot()
+```
+
+Note: now im only looking at associations with credit risk but what baout correlations between predictors?
 
 # Feature engineering 
 
@@ -64,11 +136,6 @@ sum(rawdata %>% is.na %>% colSums) > 0
 Identify categorical variables and print levels to get an overview
 
 ```{r result = "asis"}
-#mutating numerical columns to numeric  
-rawdata %>% 
-	mutate(age = as.numeric(age),
-	       amount = as.numeric(amount),
-	       duration = as.numeric(duration))-> rawdata
 # Exploring factor variables
 columninfo <- apply(rawdata %>% select(!where(is.numeric)), 2, function(col) {
 col %>% table -> mystr
@@ -149,16 +216,18 @@ Now we have `r ncol(edited)-1` variables:
 print(colnames(edited))
 ```
 
+## Data split
+
+random split or stratified?
+down sampling or not?
+
 
 Consider transformations or scaling of numerical variables (depends on distribution and algorithm to be used on the data). Not doing anything for now due to time reasons (and the need to read up on it)
 
 ```{r scaling}
+#log numerical variables
 ```
 
 
 
-# Data split
-
-random split or stratified?
-down sampling or not?
 
