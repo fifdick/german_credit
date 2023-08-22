@@ -27,7 +27,7 @@ library(patchwork)
 library(rstatix)
 rawdata <- rchallenge::german
 #define colors
-cols_sex = c("Female" = "lightseagreen", "Male" = "violetred4")
+cols_sex = c("F" = "lightseagreen", "M" = "violetred4")
 cols_risk = c("good" = "darkseagreen3", "bad" = "firebrick2")
 ```
 
@@ -37,6 +37,11 @@ Raw, unedited data looks messy:
 
 ```{r echo = FALSE}
 dim(rawdata)
+rawdata <- rawdata %>%	
+	mutate(gender = case_when(personal_status_sex == "male : divorced/separated" | personal_status_sex == "male : married/widowed" ~ "M",
+			          personal_status_sex == "female : non-single or male : single" ~ NA,
+				  personal_status_sex == "female : single" ~ "F")) %>%
+
 DT::datatable(rawdata)
 ```
 
@@ -111,13 +116,14 @@ ggplot(df, aes(x = credit_risk, y = value, col = credit_risk)) +
 rawdata %>%
 	select(-where(is.numeric)) %>%
 	mutate(id = seq(1,nrow(.))) %>%
-	reshape2::melt(., id.vars = "id") %>% 
-	group_by(variable, value) %>%
+	reshape2::melt(., id.vars = c("gender", "id")) %>% 
+	group_by(variable, gender, value) %>%
 	tally %>%
-	mutate(perc = 100 * (n / sum(n))) %>%
-ggplot(., aes(x = value, y = perc)) +
+	mutate(perc = 100 * (n / sum(n))) %>% 
+ggplot(., aes(x = value, y = perc, fill = gender)) +
 geom_bar(stat = "identity") +
 coord_flip() +
+scale_fill_manual(values = cols_sex) +
 facet_wrap(~variable, scales =  "free") +
 theme_cowplot()
 ```
