@@ -10,7 +10,7 @@ output:
 ---
 
 ```{r}
-knitr::opts_chunk$set(collapse = TRUE, echo = FALSE, message = FALSE, warning = FALSE)
+knitr::opts_chunk$set(collapse = TRUE, echo = TRUE, message = FALSE, warning = FALSE)
 ```
 
 
@@ -27,14 +27,43 @@ rawdata <- rchallenge::german
 
 Raw, unedited data looks messy:
 
-```{r}
-ncol(rawdata)
+```{r echo = FALSE}
+dim(rawdata)
 DT::datatable(rawdata)
 ```
 
-Plan: encode, introduce dummy variables where necessary, data split, .
+## Response variable 
 
-```{r}
+- (Should the data be split before EDA or after? Performing associations between response variable and predictors could result in "data leak".)   
+- The response variable is imbalanced with the minority class being the one that is "more important" since we aim at identifying bad risk individuals.  
+- By definition this imbalance is still mild. Therefore I conclude to not think about downsampling but rather making sure to use an adequate evaluation metric (not accuracy) later on.   
+```{r echo = FALSE}
+rawdata %>%
+	group_by(credit_risk) %>%
+	tally %>%
+	mutate(Perc = paste0(100*n / sum(n), "%"))
+```
+
+## Imbalances among predictor variables
+
+Skewed distributions or categorical variables with underrepresented categories?
+
+
+
+
+
+# Feature engineering 
+
+
+No missing values, although in truth there is missing information (e.g. people without checking or savings account). But no imputation needed right now.
+
+```{r }
+sum(rawdata %>% is.na %>% colSums) > 0
+```
+
+Identify categorical variables and print levels to get an overview
+
+```{r result = "asis"}
 #mutating numerical columns to numeric  
 rawdata %>% 
 	mutate(age = as.numeric(age),
@@ -46,89 +75,90 @@ col %>% table -> mystr
 mystr	      #cat(col, "\n", as.character(mystr), "\n")
 	  })
 
-columninfo
+#columninfo
 ```
 
-```{r}
+Notes and thoughts while encoding variables. Some decisions are probably not optimal but time is limited.  
+
+- Encode categorical variables which are ordinal with integers
+- Introduce dummy variables for true categorical variables
+- Encoding the response variable such that the positive class (1) is assigned to "bad" risk: 
+	-->more intuitive because we want to avoid missing bad risk cases (FN), rather than missing good risk cases.  
+- The encoding code be done in a much simpler way but now I will also directly go through the variables to get familiar with them  
+- For some variables it is difficult for me to know if they could actually be oridnal, like housing or "other installment plans", so I will keep them categorical. And of course the point is to identify possibly new insights, for example that after all people who have life insurances are a lower risk than people with real estate  
+- Im splitting personal status and gender because Im interested if one of these will come up higher later in the variable importance analysis --> hm cant actually split it, weird variable  
+- I assume relativeley equal magnitudes between the values of those categorical ordinal variables, although this could be argued about. 
+
+
+```{r encoding}
 edited <- rawdata %>%
-	mutate(status = 
-	       case_when(status == "... < 0 DM" ~
+	mutate(credit_risk = ifelse(credit_risk == "bad", 1, 0), 
+	       foreign_worker = ifelse(foreign_worker == "yes", 1, 0),
+		telephone = ifelse(telephone == "no", 0, 1),
+		people_liable = ifelse(people_liable == "0 to 2", 1, 2),
+		number_credits = case_when( number_credits == "1" ~ 1,
+					    number_credits == "2-3" ~ 2,
+					    number_credits == "4-5" ~ 3,
+					    number_credits == ">= 6" ~ 4,
+					    TRUE ~ NA),
+	       present_residence = case_when( present_residence == "< 1 yr" ~ 1,
+					      present_residence == "1 <= ... < 4 yrs" ~ 2,
+					      present_residence == "4 <= ... < 7 yrs" ~ 3,
+					      present_residence == ">= 7 yrs" ~ 4,
+					      TRUE ~ NA),
+	       installment_rate = case_when( installment_rate == "< 20" ~ 1,
+					     installment_rate == "20 <= ... < 25" ~ 2,
+					     installment_rate == "25 <= ... < 35" ~ 3,
+					     installment_rate == ">= 35" ~ 4,
+					     TRUE ~ NA),
+	       employment_duration = case_when( employment_duration == "unemployed" ~ 0,
+					        employment_duration == "< 1 yr" ~ 1,
+						employment_duration == "1 <= ... < 4 yrs" ~ 2,
+						employment_duration == "4 <= ... < 7 yrs" ~ 3,
+						employment_duration == ">= 7 yrs" ~ 4,
+						TRUE ~ NA),
+# This is tricky because the case of unknown and no savings account are not necessarily the same. First intuition is to rate it as the lowest cateogory but it could also be a NA, the problem is its 600 values..Other option is to leave this variable categorical even though it is clearly ordinal
+# The same applies to status (of checking account)
+	 	savings = case_when( savings == "unknown/no savings account" ~ 0,
+				     savings == "... <  100 DM" ~  1,
+				     savings == "100 <= ... <  500 DM" ~ 2,
+				     savings == "500 <= ... < 1000 DM" ~ 3,
+				     savings == "... >= 1000 DM" ~ 4,
+				     TRUE ~ NA),
+	# Treating debt (< 0DM) and no checking account as the same...probably not a good idea
+	       status = case_when(status == "... < 0 DM" | status ==  "no checking account" ~ 0,
+				   status ==  "0<= ... < 200 DM" ~ 1,
+				   status == "... >= 200 DM / salary for at least 1 year" ~ 2)) %>%
+	dplyr::bind_cols(model.matrix( ~ 0 + job + housing + other_installment_plans + property + other_debtors + personal_status_sex + purpose + credit_history, rawdata) %>% as.data.frame) 
 ```
 
-## Data split
-
-
-## Missing values
-
-```{r}
-apply(rawdata, 2, is.character)
-rawdata %>% is.na %>% colSums
+```{r, include=FALSE}
+knitr::knit_hooks$set(output = function(x, options){
+  if(!is.null(options$max_height)){
+    paste('<pre style = "max-height:', options$max_height, '; float: left; width: 700px; overflow-y: auto;">', x, "</pre>", sep = "")
+  }else{
+    x
+  }
+  
+})
 ```
 
-No missing values? 
+Now we have `r ncol(edited)-1` variables: 
 
-## Response variable
-
-Data leak if distribution of classes is investigated on complete dataset?
-
-```{r}
-rawdata %>% group_by(credit_risk) %>% tally
+```{r echo = FALSE, max_height = "100px"}
+print(colnames(edited))
 ```
 
-Notes:
-outlier detection scatter plots
-paralllel category plot to relate categorical variables to each other
--brier score to check if predicted propabilities match actual probabilties
--feature importance to interpretation
-e.g information gain xgboost |
-30% bad cases-> if are the positives (1) then FN are very important that would be missed bad risks
-if good are the positives then FP are very important..that encoding is more intuitive -> ROC AUC but maybe better PR AUC for both classes  and F1 score hamonic average--> detection of rare events but they dont generalize well
-does no checking or saving account most likley mean no savings or is it a true NA
--standard scale numerical variables (robust to outliers) 
--age categories?!
--split personal status and gender?
--number of existing credits is ordinal
--which other variables are oridnal?
-	people liable
--imbalanced predictors:
-	foreign workers
-	guarantors
-	other installment plans
-	job unemployed category
-	number of existing credits category 4
-	personal status
-	checking account
-	--> could  reduce number of categories for these
--simple feature selection: chi square
--pca?
--balance dataset:
-	by definition mild imbalance (within 40% minority cases)
-	balance train:
-	1. train on true distribution -> if it generalizes well good
-	2. downsample balance training data--> reduce number of bad risk instances
-	   stratified sampling versus random sampling
-	   Accuracy bad metric for imbalanced dataset
-	   area under ROC
-	   so try to model without resampling but look at precision and recall and if at accuracy then compare to baseline
-	SMOTE in python synthesizes minority class samples
--zeroR or randomRate
-Odds of Guessing Minority Correct: 0.25 * 0.25 = 0.0625
-Odds of Guessing Majority Correct: 0.75 * 0.75 = 0.5625
-Baseline = 0.25**2 + 0.75**2 = 0.625
--> informs how much value model adds to random guess but accuracy must additionally be over majority vote guess (zeroR)
 
--test 25%
--caret createDataPartition, DMwR -> smote function
-trainIndex <- createDataPartition(iris$Species, p = .8, list = FALSE)
-training <- iris[trainIndex, ]
-testing <- iris[-trainIndex, ]
-# Apply SMOTE to the training set
-training_balanced <- SMOTE(Species ~ ., training, k = 5, perc.over = 100, perc.under = 200)
+Consider transformations or scaling of numerical variables (depends on distribution and algorithm to be used on the data). Not doing anything for now due to time reasons (and the need to read up on it)
 
-# Train a decision tree model on the resampled training set
-model <- train(Species ~ ., training_balanced, method = "rpart")
+```{r scaling}
+```
 
-# Evaluate the performance of the trained model on the testing set
-predictions <- predict(model, testing)
-confusionMatrix(predictions, testing$Species)
--feature selection
+
+
+# Data split
+
+random split or stratified?
+down sampling or not?
+
