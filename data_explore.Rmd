@@ -292,7 +292,7 @@ x %>% mutate_at(c("age", "duration", "amount"), log2)  %>%
 x$id <- paste0("A",rownames(x))
 rownames(x) <- x$id
 train_x <- x %>% dplyr::sample_frac(.7) %>% select(-credit_risk,-credit_risk_fac)
-test_x  <- x %>% anti_join(., train_x, by = "id") %>% select(-credit_risk, credit_risk_fac)
+test_x  <- x %>% anti_join(., train_x, by = "id") %>% select(-credit_risk, -credit_risk_fac)
 train_y <- x[train_x$id, "credit_risk_fac"]  
 test_y <- x[test_x$id, "credit_risk_fac"]
 train_x <- train_x %>% select(-id)
@@ -392,6 +392,12 @@ tuneGrid = xgb_grid_1,
 method = "xgbTree",
 metric = "Fbeta"
 )
+#
+saveRDS(xgb_train_1, "xgb1.rds")
+saveRDS(xgb_train_up, "xgbup.rds")
+saveRDS(xgb_train_down, "xgbdown.rds")
+saveRDS(xgb_train_smote, "xgbsmote.rds")
+
 
 #plot tuning based on f1
 plot(xgb_train_1)
@@ -404,7 +410,7 @@ plot(xgb_train_smote)
 xgb_train_smote$results %>% arrange(desc(Fbeta)) %>% head(1)
 
 #plot roc when classProb = true plot all three models in one
-p1 <- evalm(list(xgb_train_1$fit, xgb_train_up, xgb_train_smote, xgb_train_down),
+p1 <- evalm(list(xgb_train_1, xgb_train_up, xgb_train_smote, xgb_train_down),
       gnames = c('imb','upsampled', 'smote', 'downsampled'), optimise = "F1", 
       rlinethick = 0.8, fsize = 8, plots = 'proc',
 	positive = "bad")
@@ -413,8 +419,8 @@ p1$roc
 
 #Fbeta of baseline model
 #Predict test and evaluate fbeta
-base_f <- sapply(xgb_train_1$control$indexOut, function(cv){
-	true = train_y[cv,]
+base_f <-  sapply(xgb_train_smote$control$indexOut, function(cv){
+	true = train_y[cv]
 	true
 	levels(true)
 	#predicted vector is random sampling from the two classes given a probability (can be adjusted to match the ratio of the classes)
@@ -425,7 +431,7 @@ base_f <- sapply(xgb_train_1$control$indexOut, function(cv){
 			levels = c("good", "bad")
 	)	
 	pred
-	tab <- caret::confusionMatrix(pred, true)
+	tab <- caret::confusionMatrix(pred, true, positive = "bad")
 	tab
 	caret::precision(tab$table)
 	caret::recall(tab$table)
@@ -433,12 +439,46 @@ base_f <- sapply(xgb_train_1$control$indexOut, function(cv){
 })
 mean(base_f)
 
+#variImp
+varImp(xgb_train_1)$importance %>% as.data.frame %>%
+	mutate(Sampling = "none") %>%
+bind_rows(varImp(xgb_train_down)$importance %>% as.data.frame %>% mutate(Sampling = "down")) %>%
+bind_rows(varImp(xgb_train_up)$importance %>% as.data.frame %>% mutate(Sampling = "up")) %>%
+bind_rows(varImp(xgb_train_smote)$importance %>% as.data.frame %>% mutate(Sampling = "smote")) %>% 
+mutate(Feature = gsub("...\\d+", "", rownames(.))) %>%
+mutate(Sampling = factor(Sampling))    -> df_vars
+# summarise to calculate overall mean across models and use levels of feature to sort
+df_vars %>%  
+	group_by(Feature) %>%
+	summarise(mean_imp = mean(Overall)) %>%
+	arrange(mean_imp) -> order_f
+df_vars <- df_vars %>%
+	mutate(Feature = factor(Feature, levels = order_f$Feature))
+
+ggplot(df_vars, aes(x = Overall, y = Feature, fill = Sampling)) +
+geom_bar(position = "dodge", stat = "identity") +
+viridis::scale_fill_viridis(discrete = T) +
+theme_cowplot()
+
+
 # predict on test
-pred <- predict(xgb_train_1, newdata = test_x %>% as.matrix)
-pred
+pred <- predict(xgb_train_smote, newdata = test_x %>% as.matrix, )
 #test_y$Diagnosis %>% as.factor -> test_y
-tab <- caret::confusionMatrix(pred, test_y)
+tab <- caret::confusionMatrix(pred, test_y, positive = "bad")
 tab
+caret::precision(tab$table)
+caret::recall(tab$table)
+caret::F_meas(tab$table, relevant = "bad", beta = 1.5) 
+# test random sampling fbeta
+# 0.346
+true = test_y
+pred = factor(sample(x = c("good", "bad"),
+			size = length(true),
+			replace = T,
+			prob = c(.7,.3)),
+			levels = c("good", "bad")
+	)	
+tab <- caret::confusionMatrix(pred, true, positive = "bad")
 caret::precision(tab$table)
 caret::recall(tab$table)
 caret::F_meas(tab$table, relevant = "bad", beta = 1.5)
@@ -447,4 +487,6 @@ caret::F_meas(tab$table, relevant = "bad", beta = 1.5)
 todo:
 
 - remove features that score low
-
+- plot boxplot for fbeta for x each model and y each cv also include random sampling fbeta
+- remove zero features
+- rerun all
