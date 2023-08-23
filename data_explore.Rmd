@@ -29,6 +29,8 @@ library(reshape2)
 library(cowplot)
 library(patchwork)
 library(rstatix)
+library(smotefamily)
+library(MLeval)
 rawdata <- rchallenge::german
 #define colors
 cols_sex = c("F" = "lightseagreen", "M" = "violetred4")
@@ -307,14 +309,14 @@ Set up grid search, tune, evaluate
 # grid search setup 
 xgb_grid_1 = expand.grid(
 #train rounds
-nrounds = 5,
+nrounds = 20,
 #Step size shrinkage used in update to prevents overfitting. After each boosting step, we can directly get the weights of new features, and eta shrinks the feature weights to make the boosting process more conservative.
 eta = c(0.01, 0.001, 0.0001, 0.00001),
 #tree depth
 max_depth = c(2, 4, 6, 8, 10, 12, 16),
 #reg parameter
 #"the higher the simpler"
-gamma = c(0.1, 0.4, 1, 2),
+gamma = c(0.1, 0.4, 1, 2, 4),
 # minimum sum of instance weight 
 min_child_weight = 1,
 # subsampling ratio of columns for each tree
@@ -326,8 +328,9 @@ subsample = c(0.4, 0.6,0.3))
 #custom function for fbeta measure
 #setting beta to 2 to emphasise recall
 #more concerned with false negatives (predicting good when its bad risk) than false positives (predicting bad when good)
+# double check that lev[2] is "bad"
 fb <- function(data, lev = NULL, model = NULL) {
-  f1_val <- FBeta_Score(y_pred = data$pred, y_true = data$obs, positive = lev[2], beta = 2)
+  f1_val <- FBeta_Score(y_pred = data$pred, y_true = data$obs, positive = lev[2], beta = 1.5)
   #custom summary function the name can be claled as argument metric for cv tuning
   #could add more metrices here
   tcs  <- twoClassSummary(data, lev, model)
@@ -338,7 +341,7 @@ fb <- function(data, lev = NULL, model = NULL) {
 # set up cross validation
 xgb_trcontrol_1 = trainControl(
 method = "cv",
-number = 2,
+number = 5,
 verboseIter = TRUE,
 returnData = FALSE,
 returnResamp = "all",                                                        # save losses across all models
@@ -346,7 +349,7 @@ classProbs = TRUE,                                                           # s
 #summaryFunction = twoClassSummary,
 summaryFunction = fb,
 allowParallel = TRUE,
-savePredictions = TRUE
+savePredictions = "final"
 )
 
 #no sampling
@@ -367,7 +370,7 @@ y = train_y,
 trControl = xgb_trcontrol_1,
 tuneGrid = xgb_grid_1,
 method = "xgbTree",
-metric = "FBeta"
+metric = "Fbeta"
 )
 #upsampling minority class
 xgb_trcontrol_1$sampling <- "up"
@@ -377,18 +380,71 @@ y = train_y,
 trControl = xgb_trcontrol_1,
 tuneGrid = xgb_grid_1,
 method = "xgbTree",
-metric = "FBeta"
+metric = "Fbeta"
 )
+#hybrid smote
+xgb_trcontrol_1$sampling <- "smote"
+xgb_train_smote = train(
+x = as.matrix(train_x),
+y = train_y,
+trControl = xgb_trcontrol_1,
+tuneGrid = xgb_grid_1,
+method = "xgbTree",
+metric = "Fbeta"
+)
+
 #plot tuning based on f1
 plot(xgb_train_1)
-xgb_train_1$results %>% head
+xgb_train_1$results %>% arrange(desc(Fbeta)) %>% head(1)
 plot(xgb_train_down)
-plot(xgb_train_up)
+xgb_train_down$results %>% arrange(desc(Fbeta)) %>% head(1)
+plot(xgb_train_up) 
+xgb_train_up$results %>% arrange(desc(Fbeta)) %>% head(1)
+plot(xgb_train_smote) 
+xgb_train_smote$results %>% arrange(desc(Fbeta)) %>% head(1)
+
 #plot roc when classProb = true plot all three models in one
+p1 <- evalm(list(xgb_train_1$fit, xgb_train_up, xgb_train_smote, xgb_train_down),
+      gnames = c('imb','upsampled', 'smote', 'downsampled'), optimise = "F1", 
+      rlinethick = 0.8, fsize = 8, plots = 'proc',
+	positive = "bad")
+p1$proc
+p1$roc
 
 #Fbeta of baseline model
-
 #Predict test and evaluate fbeta
+base_f <- sapply(xgb_train_1$control$indexOut, function(cv){
+	true = train_y[cv,]
+	true
+	levels(true)
+	#predicted vector is random sampling from the two classes given a probability (can be adjusted to match the ratio of the classes)
+	pred = factor(sample(x = c("good", "bad"),
+			size = length(true),
+			replace = T,
+			prob = c(.7,.3)),
+			levels = c("good", "bad")
+	)	
+	pred
+	tab <- caret::confusionMatrix(pred, true)
+	tab
+	caret::precision(tab$table)
+	caret::recall(tab$table)
+	caret::F_meas(tab$table, relevant = "bad", beta = 1.5)
+})
+mean(base_f)
+
+# predict on test
+pred <- predict(xgb_train_1, newdata = test_x %>% as.matrix)
+pred
+#test_y$Diagnosis %>% as.factor -> test_y
+tab <- caret::confusionMatrix(pred, test_y)
+tab
+caret::precision(tab$table)
+caret::recall(tab$table)
+caret::F_meas(tab$table, relevant = "bad", beta = 1.5)
 ```
 
+todo:
+
+- remove features that score low
 
