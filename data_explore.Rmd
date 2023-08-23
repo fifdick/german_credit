@@ -169,7 +169,7 @@ how many bad/good in one level or how much percentage a level makes up of the ca
 
 Note: now im only looking at associations with credit risk but what baout correlations between predictors?
 
-# Feature engineering 
+# Encoding variables 
 
 
 No missing values, although in truth there is missing information (e.g. people without checking or savings account). But no imputation needed right now.
@@ -270,9 +270,79 @@ down sampling or not?
 Consider transformations or scaling of numerical variables (depends on distribution and algorithm to be used on the data). Not doing anything for now due to time reasons (and the need to read up on it)
 
 ```{r scaling}
+library(xgboost)
+library(caret)
+library(MLmetrics)
+library(Metrics)
+set.seed(123)
+#
+
+x  <- edited
 #log numerical variables
+x %>% mutate_at(c("age", "duration", "amount"), log2)  %>%
+	mutate(credit_risk_fac = factor(ifelse(credit_risk == 1, "bad", "good"), levels = c("good", "bad"))) -> x
+x$id <- paste0("A",rownames(x))
+train_x <- x %>% dplyr::sample_frac(.7) %>% select(-credit_risk)
+test_x  <- x %>% anti_join(., train_x, by = "id") %>% select(-credit_risk)
+train_y <- x[train_x$id, "credit_risk_fac"]  
+test_y <- x[test_x$id, "credit_risk_fac"]
+train_x <- train_x %>% select(-id)
+test_x <- test_x %>% select(-id)
 ```
 
 
+Set up grid search 
+
+```{r}
+# grid search setup 
+xgb_grid_1 = expand.grid(
+#train rounds
+nrounds = 100,
+#Step size shrinkage used in update to prevents overfitting. After each boosting step, we can directly get the weights of new features, and eta shrinks the feature weights to make the boosting process more conservative.
+eta = c(0.01, 0.001, 0.0001, 0.00001),
+#tree depth
+max_depth = c(6, 8, 10, 16),
+#reg parameter
+#"the higher the simpler"
+gamma = c(0.1, 0.4),
+# minimum sum of instance weight 
+min_child_weight = 1,
+# subsampling ratio of columns for each tree
+colsample_bytree = c(1, 0.4, 0.8),
+subsample = c(0.4, 0.6))
+#
+
+#custom function for f1 measure
+f1 <- function(data, lev = NULL, model = NULL) {
+  f1_val <- F1_Score(y_pred = data$pred, y_true = data$obs, positive = lev[2])
+  c(F1 = f1_val)
+}
+
+# set up cross validation
+xgb_trcontrol_1 = trainControl(
+method = "cv",
+number = 5,
+verboseIter = TRUE,
+returnData = FALSE,
+returnResamp = "all",                                                        # save losses across all models
+classProbs = TRUE,                                                           # set to TRUE for AUC to be computed
+#summaryFunction = twoClassSummary,
+summaryFunction = f1,
+allowParallel = TRUE
+)
+
+
+#train
+xgb_train_1 = train(
+x = as.matrix(train_x),
+y = ,
+trControl = xgb_trcontrol_1,
+tuneGrid = xgb_grid_1,
+method = "xgbTree",
+metric = "F1"
+)
+p
+
+```
 
 
