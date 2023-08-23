@@ -16,6 +16,10 @@ knitr::opts_chunk$set(collapse = TRUE, echo = TRUE, message = FALSE, warning = F
 
 ```{r echo =  FALSE}
 set.seed(123)
+library(xgboost)
+library(caret)
+library(MLmetrics)
+#library(Metrics)
 library(knitrBootstrap)
 library(rchallenge)
 library(DT)
@@ -105,6 +109,8 @@ p2
   	geom_hline(yintercept=1:3-0.5, colour="white", size=2)  -> p3
 
 p3
+
+#ADD ggpairs
 # Can numerical variables alone separate good from bad?
 prcomp(df_wide %>% select(where(is.numeric)) %>% log, scale = T, center = T) -> pca 
 # Extract loadings of the variables
@@ -241,6 +247,7 @@ edited <- rawdata %>%
 	       status = case_when(status == "... < 0 DM" | status ==  "no checking account" ~ 0,
 				   status ==  "0<= ... < 200 DM" ~ 1,
 				   status == "... >= 200 DM / salary for at least 1 year" ~ 2)) %>%
+	select(-c(job, housing, other_installment_plans, property, other_debtors, personal_status_sex, purpose, credit_history)) %>%
 	dplyr::bind_cols(model.matrix( ~ 0 + job + housing + other_installment_plans + property + other_debtors + personal_status_sex + purpose + credit_history, rawdata) %>% as.data.frame) 
 ```
 
@@ -261,6 +268,8 @@ Now we have `r ncol(edited)-1` variables:
 print(colnames(edited))
 ```
 
+# Xgboost
+
 ## Data split
 
 random split or stratified?
@@ -269,80 +278,117 @@ down sampling or not?
 
 Consider transformations or scaling of numerical variables (depends on distribution and algorithm to be used on the data). Not doing anything for now due to time reasons (and the need to read up on it)
 
-```{r scaling}
-library(xgboost)
-library(caret)
-library(MLmetrics)
-library(Metrics)
-set.seed(123)
-#
 
+
+TODO: improve this and think about downsampling good
+```{r datasplit}
 x  <- edited
 #log numerical variables
 x %>% mutate_at(c("age", "duration", "amount"), log2)  %>%
+	select(-gender) %>%
 	mutate(credit_risk_fac = factor(ifelse(credit_risk == 1, "bad", "good"), levels = c("good", "bad"))) -> x
 x$id <- paste0("A",rownames(x))
-train_x <- x %>% dplyr::sample_frac(.7) %>% select(-credit_risk)
-test_x  <- x %>% anti_join(., train_x, by = "id") %>% select(-credit_risk)
+rownames(x) <- x$id
+train_x <- x %>% dplyr::sample_frac(.7) %>% select(-credit_risk,-credit_risk_fac)
+test_x  <- x %>% anti_join(., train_x, by = "id") %>% select(-credit_risk, credit_risk_fac)
 train_y <- x[train_x$id, "credit_risk_fac"]  
 test_y <- x[test_x$id, "credit_risk_fac"]
 train_x <- train_x %>% select(-id)
 test_x <- test_x %>% select(-id)
 ```
 
+## Tune with grid search
 
-Set up grid search 
+Set up grid search, tune, evaluate
+
+** todo: for now the F1 is treating both classes equal, need to find out where I can adjust beta, or use the caret thing where you can give class weights
 
 ```{r}
 # grid search setup 
 xgb_grid_1 = expand.grid(
 #train rounds
-nrounds = 100,
+nrounds = 5,
 #Step size shrinkage used in update to prevents overfitting. After each boosting step, we can directly get the weights of new features, and eta shrinks the feature weights to make the boosting process more conservative.
 eta = c(0.01, 0.001, 0.0001, 0.00001),
 #tree depth
-max_depth = c(6, 8, 10, 16),
+max_depth = c(2, 4, 6, 8, 10, 12, 16),
 #reg parameter
 #"the higher the simpler"
-gamma = c(0.1, 0.4),
+gamma = c(0.1, 0.4, 1, 2),
 # minimum sum of instance weight 
 min_child_weight = 1,
 # subsampling ratio of columns for each tree
-colsample_bytree = c(1, 0.4, 0.8),
-subsample = c(0.4, 0.6))
+colsample_bytree = c(1, 0.4, 0.8, 0.6, 0.7),
+#colsample_bylevel = c(0.3, 0.5, 0.8),
+subsample = c(0.4, 0.6,0.3))
 #
 
-#custom function for f1 measure
-f1 <- function(data, lev = NULL, model = NULL) {
-  f1_val <- F1_Score(y_pred = data$pred, y_true = data$obs, positive = lev[2])
-  c(F1 = f1_val)
+#custom function for fbeta measure
+#setting beta to 2 to emphasise recall
+#more concerned with false negatives (predicting good when its bad risk) than false positives (predicting bad when good)
+fb <- function(data, lev = NULL, model = NULL) {
+  f1_val <- FBeta_Score(y_pred = data$pred, y_true = data$obs, positive = lev[2], beta = 2)
+  #custom summary function the name can be claled as argument metric for cv tuning
+  #could add more metrices here
+  tcs  <- twoClassSummary(data, lev, model)
+  prs  <- prSummary(data, lev, model)
+   c(Fbeta = f1_val, twoClSum = tcs, prSum <- prs)
 }
 
 # set up cross validation
 xgb_trcontrol_1 = trainControl(
 method = "cv",
-number = 5,
+number = 2,
 verboseIter = TRUE,
 returnData = FALSE,
 returnResamp = "all",                                                        # save losses across all models
 classProbs = TRUE,                                                           # set to TRUE for AUC to be computed
 #summaryFunction = twoClassSummary,
-summaryFunction = f1,
-allowParallel = TRUE
+summaryFunction = fb,
+allowParallel = TRUE,
+savePredictions = TRUE
 )
 
-
+#no sampling
 #train
 xgb_train_1 = train(
 x = as.matrix(train_x),
-y = ,
+y = train_y,
 trControl = xgb_trcontrol_1,
 tuneGrid = xgb_grid_1,
 method = "xgbTree",
-metric = "F1"
+metric = "Fbeta"
 )
-p
+#down sample majority class
+xgb_trcontrol_1$sampling <- "down"
+xgb_train_down = train(
+x = as.matrix(train_x),
+y = train_y,
+trControl = xgb_trcontrol_1,
+tuneGrid = xgb_grid_1,
+method = "xgbTree",
+metric = "FBeta"
+)
+#upsampling minority class
+xgb_trcontrol_1$sampling <- "up"
+xgb_train_up = train(
+x = as.matrix(train_x),
+y = train_y,
+trControl = xgb_trcontrol_1,
+tuneGrid = xgb_grid_1,
+method = "xgbTree",
+metric = "FBeta"
+)
+#plot tuning based on f1
+plot(xgb_train_1)
+xgb_train_1$results %>% head
+plot(xgb_train_down)
+plot(xgb_train_up)
+#plot roc when classProb = true plot all three models in one
 
+#Fbeta of baseline model
+
+#Predict test and evaluate fbeta
 ```
 
 
