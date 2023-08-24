@@ -35,6 +35,7 @@ rawdata <- rchallenge::german
 #define colors
 cols_sex = c("F" = "lightseagreen", "M" = "violetred4")
 cols_risk = c("good" = "darkseagreen3", "bad" = "firebrick2")
+library(treeshap)
 ```
 
 # General data exploration 
@@ -130,13 +131,13 @@ pca$x %>%
      color = "black") +
 	annotate("text", x = (pca_loadings$PC1), y = (pca_loadings$PC2),
      label = pca_loadings$Variables) +
-	theme_cowplot()
+	theme_cowplot() -> p4 
 
 
-#(p1 + p2) / p3
+(p1 + p2) / (p3 + p4)
 ```
 - Loan amount and Duration both along the first, explaining most of the variance, age in the second PC
-- Log transfrom to alleviat skewedness AFTER data split
+- Log transfrom to alleviate skewedness AFTER data split
 - identificaton of outliers after datasplit replot distributions?
 - Corrplot for categorical variables
 
@@ -153,7 +154,7 @@ geom_bar(position = "dodge", stat = "identity") +
 coord_flip() +
 scale_fill_manual(values = cols_sex) +
 facet_wrap(~variable, ncol = 3, scales =  "free") +
-theme_cowplot()
+theme_cowplot() -> p1
 ```
 
 ```{r cat_risk, fig.width = 15, fig.height = 12}
@@ -162,15 +163,20 @@ rawdata %>%
 	mutate(id = seq(1,nrow(.))) %>%
 	reshape2::melt(., id.vars = c("credit_risk", "id")) %>% 
 	group_by(variable, credit_risk, value) %>%
-	tally %>%
+	tally %>% head
 	mutate(perc = 100 * (n / sum(n))) %>% 
 ggplot(., aes(x = value, y = perc, fill = credit_risk)) +
 geom_bar(stat = "identity", position = "dodge") +
 coord_flip() +
 scale_fill_manual(values = cols_risk) +
 facet_wrap(~variable, scales =  "free", ncol = 3) +
-theme_cowplot()
+theme_cowplot() -> p2
 ```
+
+```{r}
+p1 + p2
+```
+
 
 NEED TO THINK ABOUT WHAT PERCENTAGE TO SHOW IN THE PLOT:
 how many bad/good in one level or how much percentage a level makes up of the category
@@ -208,9 +214,13 @@ Notes and thoughts while encoding variables. Some decisions are probably not opt
 - For some variables it is difficult for me to know if they could actually be oridnal, like housing or "other installment plans", so I will keep them categorical. And of course the point is to identify possibly new insights, for example that after all people who have life insurances are a lower risk than people with real estate  
 - Im splitting personal status and gender because Im interested if one of these will come up higher later in the variable importance analysis --> hm cant actually split it, weird variable  
 - I assume relativeley equal magnitudes between the values of those categorical ordinal variables, although this could be argued about. 
-
+- Dummy variables are good when doing lm etc (avoid collinear variables) doesnt matter much for tree based algorithms and can pose a problem when done before data split if test set doesnt have a level you end up with another variable 
 
 ```{r encoding}
+categorical <- c("job", "housing", "other_installment_plans", "property", "other_debtors", "personal_status_sex", "purpose", "credit_history")
+M1 <- paste("~ 0 +", paste(categorical, collapse = "+"))
+model.matrix(as.formula(M1),rawdata) %>% colnames -> cat_names
+
 edited <- rawdata %>%
 	mutate(credit_risk = ifelse(credit_risk == "bad", 1, 0), 
 	       foreign_worker = ifelse(foreign_worker == "yes", 1, 0),
@@ -249,9 +259,10 @@ edited <- rawdata %>%
 	       status = case_when(status == "... < 0 DM" | status ==  "no checking account" ~ 0,
 				   status ==  "0<= ... < 200 DM" ~ 1,
 				   status == "... >= 200 DM / salary for at least 1 year" ~ 2)) %>%
-	select(-c(job, housing, other_installment_plans, property, other_debtors, personal_status_sex, purpose, credit_history)) %>%
-	dplyr::bind_cols(model.matrix( ~ 0 + job + housing + other_installment_plans + property + other_debtors + personal_status_sex + purpose + credit_history, rawdata) %>% as.data.frame) 
+	select(-all_of(categorical)) %>%
+	dplyr::bind_cols(model.matrix(as.formula(M1), rawdata) %>% as.data.frame) 
 ```
+
 
 ```{r, include=FALSE}
 knitr::knit_hooks$set(output = function(x, options){
@@ -270,19 +281,13 @@ Now we have `r ncol(edited)-1` variables:
 print(colnames(edited))
 ```
 
-# Xgboost
-
 ## Data split
 
-random split or stratified?
-down sampling or not?
+- random split or stratified?
+- down sampling or not?
+- Consider transformations or scaling of numerical variables (depends on distribution and algorithm to be used on the data). Not doing anything for now due to time reasons (and the need to read up on it)
 
-
-Consider transformations or scaling of numerical variables (depends on distribution and algorithm to be used on the data). Not doing anything for now due to time reasons (and the need to read up on it)
-
-
-
-TODO: improve this and think about downsampling good
+- TODO: improve this and think about downsampling good
 ```{r datasplit}
 x  <- edited
 #log numerical variables
@@ -299,17 +304,41 @@ train_x <- train_x %>% select(-id)
 test_x <- test_x %>% select(-id)
 ```
 
+Look at the orinal variables
+
+```{r}
+train_x %>% select(-all_of(cat_names),-age,-duration,-amount) %>%
+	bind_cols("credit_risk" = train_y) %>%
+	mutate(id = rownames(.)) %>%
+	reshape2::melt(., id.vars = c("id", "credit_risk")) %>%
+	group_by(variable, credit_risk, value) %>%
+	tally %>%
+	mutate(PercOfRiskGroup = n / sum(n)) -> df
+ggplot(df, aes(x = as.factor(value), y = PercOfRiskGroup,  fill = credit_risk)) +
+	geom_bar(stat = "identity", position = "dodge") +
+	labs(x = "Level", y = "% credit_risk group per level") +
+#	geom_density() +
+	scale_fill_manual(values = cols_risk) +
+	facet_wrap(~variable, ncol = 3, scales = "free") +
+	cowplot::theme_cowplot() -> p1
+p1
+```
+
+
+
+# Xgboost
+
 ## Tune with grid search
 
 Set up grid search, tune, evaluate
 
 ** todo: for now the F1 is treating both classes equal, need to find out where I can adjust beta, or use the caret thing where you can give class weights
 
-```{r}
+```{r eval = F}
 # grid search setup 
 xgb_grid_1 = expand.grid(
 #train rounds
-nrounds = 20,
+nrounds = 5,
 #Step size shrinkage used in update to prevents overfitting. After each boosting step, we can directly get the weights of new features, and eta shrinks the feature weights to make the boosting process more conservative.
 eta = c(0.01, 0.001, 0.0001, 0.00001),
 #tree depth
@@ -407,29 +436,45 @@ saveRDS(xgb_train_smote, "xgbsmote_beta2_selectedF.rds")
 #Saved current model with beta 2, but first reload the beta 1.5 and doucment performance and feature importance
 # do the same for beta 2 models
 # rerun with reduced features 
+```
+
+Results of first try: all features (beta = 2)
+
+```{r}
+xgb_train_1 <- readRDS("./firstModelsAllFeat/xgb1_beta2.rds")
+xgb_train_down  <- readRDS("./firstModelsAllFeat/xgbdown_beta2.rds")
+xgb_train_up  <- readRDS("./firstModelsAllFeat/xgbup_beta2.rds")
+xgb_train_smote  <- readRDS("./firstModelsAllFeat/xgbsmote_beta2.rds")
 
 
 #plot tuning based on f1
 plot(xgb_train_1)
-xgb_train_1$results %>% arrange(desc(Fbeta)) %>% head(1)
+plot(xgb_train_up)
 plot(xgb_train_down)
-xgb_train_down$results %>% arrange(desc(Fbeta)) %>% head(1)
-plot(xgb_train_up) 
-xgb_train_up$results %>% arrange(desc(Fbeta)) %>% head(1)
-plot(xgb_train_smote) 
-xgb_train_smote$results %>% arrange(desc(Fbeta)) %>% head(1)
+plot(xgb_train_smote)
+```
 
-#plot roc when classProb = true plot all three models in one
-p1 <- evalm(list(xgb_train_up, xgb_train_up, xgb_train_smote, xgb_train_down),
-      gnames = c('imb','upsampled', 'smote', 'downsampled'), optimise = "F1", 
-      rlinethick = 0.8, fsize = 8, plots = 'proc',
-	positive = "bad")
-p1$proc
-p1$roc
+ARghh..the twoclass summary did not calculate precision and recall according to "bad"
 
+```{r}
+getMyDf <- function(trainObj_lst) {
+	lapply(trainObj_lst, function(trainObj){
+		tab1 <- caret::confusionMatrix(trainObj)
+		myRow <- data.frame(Fbeta = caret::F_meas(tab1$table, relevant = "bad", beta = 2),
+		   		Precision = caret::precision(tab1$table, relevant = "bad"),
+		   		Recall = caret::recall(tab1$table, relevant = "bad"),
+		   		FbetaSD =  trainObj$results %>%
+			   			arrange(desc(Fbeta)) %>% head(1) %>% 
+			    			pull(FbetaSD))
+		return(myRow)
+	}) %>%
+	do.call(rbind, .)
+}
+getMyDf(list(xgb_train_1, xgb_train_up, xgb_train_down, xgb_train_smote)) %>%
+	mutate(Sampling = c("None", "Up", "Down", "Smote")) ->df1
 #Fbeta of baseline model
 #Predict test and evaluate fbeta
-base_f <-  sapply(xgb_train_smote$control$indexOut, function(cv){
+base_f <-  lapply(xgb_train_1$control$indexOut, function(cv){
 	true = train_y[cv]
 	true
 	levels(true)
@@ -437,17 +482,52 @@ base_f <-  sapply(xgb_train_smote$control$indexOut, function(cv){
 	pred = factor(sample(x = c("good", "bad"),
 			size = length(true),
 			replace = T,
-			prob = c(.7,.3)),
+			prob = c(.3,.7)),
 			levels = c("good", "bad")
 	)	
 	pred
 	tab <- caret::confusionMatrix(pred, true, positive = "bad")
 	tab
-	caret::precision(tab$table)
-	caret::recall(tab$table)
-	caret::F_meas(tab$table, relevant = "bad", beta = 2)
+	pr <- caret::precision(tab$table, relevant = "bad" )
+	rec  <- caret::recall(tab$table, relevant = "bad")
+	fb  <- caret::F_meas(tab$table, relevant = "bad", beta = 2)
+	return(list("Fbeta" = fb, "Precision" = pr, "Recall" = rec)) 
 })
-mean(base_f)
+do.call(rbind, base_f) %>%
+	as.matrix %>%
+	apply(., 2, as.numeric) %>%
+	as.data.frame %>%
+	dplyr::rename(fb = Fbeta) %>%
+	summarise(Fbeta = mean(fb),
+		 Recall = mean(Recall),
+		Precision = mean(Precision),
+		FbetaSD = sd(fb)) %>%
+	reshape2::melt(.) %>%
+	mutate(Sampling = "BL_imbalanced") -> base_f_imb
+
+df1 %>% 
+	reshape2::melt(., id.vars = "Sampling") %>%
+	bind_rows(base_f_imb) %>%
+	bind_rows(base_f_balanced) %>%
+	ggplot(., aes(x = Sampling, y = value, col = Sampling)) +
+	geom_point(size = 5) +
+	viridis::scale_color_viridis(discrete = T) +
+	facet_wrap(~variable, scales = "free", ncol = 2) +
+	panel_border() +
+  	background_grid() +
+#	theme_minimal_grid() +
+ 	theme(axis.text.x = element_text(angle = 45)) +
+theme(text = element_text(size = 20))
+#xgb_train_1$results %>% arrange(desc(Fbeta)) %>% 
+#	head(1) %>% 
+#	select(Fbeta, FbetaSD, Precision, Recall) %>%
+#	mutate(Sampling = "None") -> df1
+#xgb_train_1$results %>% arrange(desc(Fbeta)) %>% 
+#	head(1) %>% 
+#	select(Fbeta, FbetaSD, Precision, Recall) %>%
+#	mutate(Sampling = "None") -> df1
+
+
 
 #variImp
 varImp(xgb_train_1)$importance %>% as.data.frame %>%
@@ -478,12 +558,12 @@ pull(Feature) -> failed_feat
 
 
 # predict on test
-pred <- predict(xgb_train_smote, newdata = test_x %>% as.matrix, )
+pred <- predict(xgb_train_down, newdata = test_x %>% as.matrix)
 #test_y$Diagnosis %>% as.factor -> test_y
 tab <- caret::confusionMatrix(pred, test_y, positive = "bad")
 tab
-caret::precision(tab$table)
-caret::recall(tab$table)
+caret::precision(tab$table, relevant = "bad")
+caret::recall(tab$table, relevant = "bad")
 caret::F_meas(tab$table, relevant = "bad", beta = 2) 
 # test random sampling fbeta
 # 0.346
@@ -495,8 +575,8 @@ pred = factor(sample(x = c("good", "bad"),
 			levels = c("good", "bad")
 	)	
 tab <- caret::confusionMatrix(pred, true, positive = "bad")
-caret::precision(tab$table)
-caret::recall(tab$table)
+caret::precision(tab$table, relevant = "bad")
+caret::recall(tab$table, relevant = "bad")
 caret::F_meas(tab$table, relevant = "bad", beta = 2)
 ```
 
