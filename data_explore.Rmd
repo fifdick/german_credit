@@ -330,7 +330,7 @@ subsample = c(0.4, 0.6,0.3))
 #more concerned with false negatives (predicting good when its bad risk) than false positives (predicting bad when good)
 # double check that lev[2] is "bad"
 fb <- function(data, lev = NULL, model = NULL) {
-  f1_val <- FBeta_Score(y_pred = data$pred, y_true = data$obs, positive = lev[2], beta = 1.5)
+  f1_val <- FBeta_Score(y_pred = data$pred, y_true = data$obs, positive = lev[2], beta = 2)
   #custom summary function the name can be claled as argument metric for cv tuning
   #could add more metrices here
   tcs  <- twoClassSummary(data, lev, model)
@@ -355,7 +355,9 @@ savePredictions = "final"
 #no sampling
 #train
 xgb_train_1 = train(
-x = as.matrix(train_x),
+#x = as.matrix(train_x),
+x = as.matrix(train_x %>% 
+	      select(-all_of(failed_feat))),
 y = train_y,
 trControl = xgb_trcontrol_1,
 tuneGrid = xgb_grid_1,
@@ -365,7 +367,8 @@ metric = "Fbeta"
 #down sample majority class
 xgb_trcontrol_1$sampling <- "down"
 xgb_train_down = train(
-x = as.matrix(train_x),
+x = as.matrix(train_x %>% 
+	      select(-all_of(failed_feat))),
 y = train_y,
 trControl = xgb_trcontrol_1,
 tuneGrid = xgb_grid_1,
@@ -375,7 +378,8 @@ metric = "Fbeta"
 #upsampling minority class
 xgb_trcontrol_1$sampling <- "up"
 xgb_train_up = train(
-x = as.matrix(train_x),
+x = as.matrix(train_x %>% 
+	      select(-all_of(failed_feat))),
 y = train_y,
 trControl = xgb_trcontrol_1,
 tuneGrid = xgb_grid_1,
@@ -385,7 +389,8 @@ metric = "Fbeta"
 #hybrid smote
 xgb_trcontrol_1$sampling <- "smote"
 xgb_train_smote = train(
-x = as.matrix(train_x),
+x = as.matrix(train_x %>% 
+	      select(-all_of(failed_feat))),
 y = train_y,
 trControl = xgb_trcontrol_1,
 tuneGrid = xgb_grid_1,
@@ -393,10 +398,15 @@ method = "xgbTree",
 metric = "Fbeta"
 )
 #
-saveRDS(xgb_train_1, "xgb1.rds")
-saveRDS(xgb_train_up, "xgbup.rds")
-saveRDS(xgb_train_down, "xgbdown.rds")
-saveRDS(xgb_train_smote, "xgbsmote.rds")
+saveRDS(xgb_train_1, "xgb1_beta2_selectedF.rds")
+saveRDS(xgb_train_up, "xgbup_beta2_selectedF.rds")
+saveRDS(xgb_train_down, "xgbdown_beta2_selectedF.rds")
+saveRDS(xgb_train_smote, "xgbsmote_beta2_selectedF.rds")
+
+
+#Saved current model with beta 2, but first reload the beta 1.5 and doucment performance and feature importance
+# do the same for beta 2 models
+# rerun with reduced features 
 
 
 #plot tuning based on f1
@@ -410,7 +420,7 @@ plot(xgb_train_smote)
 xgb_train_smote$results %>% arrange(desc(Fbeta)) %>% head(1)
 
 #plot roc when classProb = true plot all three models in one
-p1 <- evalm(list(xgb_train_1, xgb_train_up, xgb_train_smote, xgb_train_down),
+p1 <- evalm(list(xgb_train_up, xgb_train_up, xgb_train_smote, xgb_train_down),
       gnames = c('imb','upsampled', 'smote', 'downsampled'), optimise = "F1", 
       rlinethick = 0.8, fsize = 8, plots = 'proc',
 	positive = "bad")
@@ -435,7 +445,7 @@ base_f <-  sapply(xgb_train_smote$control$indexOut, function(cv){
 	tab
 	caret::precision(tab$table)
 	caret::recall(tab$table)
-	caret::F_meas(tab$table, relevant = "bad", beta = 1.5)
+	caret::F_meas(tab$table, relevant = "bad", beta = 2)
 })
 mean(base_f)
 
@@ -460,6 +470,12 @@ geom_bar(position = "dodge", stat = "identity") +
 viridis::scale_fill_viridis(discrete = T) +
 theme_cowplot()
 
+# remove zero variables
+df_vars %>% group_by(Feature) %>%
+	summarise(s = sum(Overall)) %>%
+	filter(s < 1) %>%
+pull(Feature) -> failed_feat
+
 
 # predict on test
 pred <- predict(xgb_train_smote, newdata = test_x %>% as.matrix, )
@@ -468,7 +484,7 @@ tab <- caret::confusionMatrix(pred, test_y, positive = "bad")
 tab
 caret::precision(tab$table)
 caret::recall(tab$table)
-caret::F_meas(tab$table, relevant = "bad", beta = 1.5) 
+caret::F_meas(tab$table, relevant = "bad", beta = 2) 
 # test random sampling fbeta
 # 0.346
 true = test_y
@@ -481,7 +497,7 @@ pred = factor(sample(x = c("good", "bad"),
 tab <- caret::confusionMatrix(pred, true, positive = "bad")
 caret::precision(tab$table)
 caret::recall(tab$table)
-caret::F_meas(tab$table, relevant = "bad", beta = 1.5)
+caret::F_meas(tab$table, relevant = "bad", beta = 2)
 ```
 
 todo:
