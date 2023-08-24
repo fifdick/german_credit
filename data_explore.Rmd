@@ -528,33 +528,44 @@ theme(text = element_text(size = 20))
 #	mutate(Sampling = "None") -> df1
 
 
-
-#variImp
-varImp(xgb_train_1)$importance %>% as.data.frame %>%
-	mutate(Sampling = "none") %>%
-bind_rows(varImp(xgb_train_down)$importance %>% as.data.frame %>% mutate(Sampling = "down")) %>%
-bind_rows(varImp(xgb_train_up)$importance %>% as.data.frame %>% mutate(Sampling = "up")) %>%
-bind_rows(varImp(xgb_train_smote)$importance %>% as.data.frame %>% mutate(Sampling = "smote")) %>% 
-mutate(Feature = gsub("...\\d+", "", rownames(.))) %>%
-mutate(Sampling = factor(Sampling))    -> df_vars
-# summarise to calculate overall mean across models and use levels of feature to sort
+#Time is limited now Im only looking at one model
+treeshap::xgboost.unify(xgb_train_down$finalModel, train_x) -> unified
+treeshap1 <- treeshap(unified, train_x, interactions = T, verbose = 0)
+treeshap1$shaps %>% apply(., 2, mean) %>% 
+	data.frame(Feature = names(.), mean_shap = .) -> df_vars
 df_vars %>%  
 	group_by(Feature) %>%
-	summarise(mean_imp = mean(Overall)) %>%
-	arrange(mean_imp) -> order_f
+	summarise(mean_imp = mean(mean_shap)) %>%
+	arrange(abs(mean_imp)) -> order_f
 df_vars <- df_vars %>%
 	mutate(Feature = factor(Feature, levels = order_f$Feature))
 
-ggplot(df_vars, aes(x = Overall, y = Feature, fill = Sampling)) +
+ggplot(df_vars, aes(x = abs(mean_shap), y = Feature, fill = as.factor(sign(mean_shap)))) +
+#scale_fill_manual(values = cols_risk) +
 geom_bar(position = "dodge", stat = "identity") +
-viridis::scale_fill_viridis(discrete = T) +
+#viridis::scale_fill_viridis(discrete = T) +
 theme_cowplot()
 
-# remove zero variables
-df_vars %>% group_by(Feature) %>%
-	summarise(s = sum(Overall)) %>%
-	filter(s < 1) %>%
-pull(Feature) -> failed_feat
+
+plot_feature_dependence(treeshap1, "duration")
+plot_interaction(treeshap1, "age", "propertyreal estate") %>%
+	scale_color_viridis(discrete = T)
+
+
+#variImp
+#varImp(xgb_train_1)$importance %>% as.data.frame %>%
+#	mutate(Sampling = "none") %>%
+#bind_rows(varImp(xgb_train_down)$importance %>% as.data.frame %>% mutate(Sampling = "down")) %>%
+#bind_rows(varImp(xgb_train_up)$importance %>% as.data.frame %>% mutate(Sampling = "up")) %>%
+#bind_rows(varImp(xgb_train_smote)$importance %>% as.data.frame %>% mutate(Sampling = "smote")) %>% 
+#mutate(Feature = gsub("...\\d+", "", rownames(.))) %>%
+#mutate(Sampling = factor(Sampling))    -> df_vars
+# summarise to calculate overall mean across models and use levels of feature to sort
+## remove zero variables
+#df_vars %>% group_by(Feature) %>%
+#	summarise(s = sum(Overall)) %>%
+#	filter(s < 1) %>%
+#pull(Feature) -> failed_feat
 
 
 # predict on test
