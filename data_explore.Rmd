@@ -548,28 +548,15 @@ theme_cowplot()
 
 
 plot_feature_dependence(treeshap1, "duration")
-plot_interaction(treeshap1, "age", "propertyreal estate") %>%
-	scale_color_viridis(discrete = T)
-
-
-#variImp
-#varImp(xgb_train_1)$importance %>% as.data.frame %>%
-#	mutate(Sampling = "none") %>%
-#bind_rows(varImp(xgb_train_down)$importance %>% as.data.frame %>% mutate(Sampling = "down")) %>%
-#bind_rows(varImp(xgb_train_up)$importance %>% as.data.frame %>% mutate(Sampling = "up")) %>%
-#bind_rows(varImp(xgb_train_smote)$importance %>% as.data.frame %>% mutate(Sampling = "smote")) %>% 
-#mutate(Feature = gsub("...\\d+", "", rownames(.))) %>%
-#mutate(Sampling = factor(Sampling))    -> df_vars
-# summarise to calculate overall mean across models and use levels of feature to sort
-## remove zero variables
-#df_vars %>% group_by(Feature) %>%
-#	summarise(s = sum(Overall)) %>%
-#	filter(s < 1) %>%
-#pull(Feature) -> failed_feat
+# better to pull out shap values and observations and plot myself with ggplot
+treeshap1$observations <- treeshap1$observations %>%
+	mutate(`propertyreal estate` = factor(`propertyreal estate`))
+plot_interaction(treeshap1, "age", "propertyreal estate") +
+	viridis::scale_color_viridis(discrete = T)
 
 
 # predict on test
-pred <- predict(xgb_train_down, newdata = test_x %>% as.matrix)
+pred <- predict(xgb_train_down, newdata = test_x %>% as.matrix, type = "prob")
 #test_y$Diagnosis %>% as.factor -> test_y
 tab <- caret::confusionMatrix(pred, test_y, positive = "bad")
 tab
